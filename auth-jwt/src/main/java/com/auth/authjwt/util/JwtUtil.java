@@ -1,43 +1,77 @@
 package com.auth.authjwt.util;
 
 import java.security.Key;
+import java.util.Base64;
 import java.util.Date;
+import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import com.auth.authjwt.entity.Role;
+import com.auth.authjwt.entity.User;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import lombok.Getter;
 
 @Component
+@Getter
 public class JwtUtil {
 
-    // private static final Key SECRET_KEY =
-    // Keys.secretKeyFor(SignatureAlgorithm.HS256);
-    private static final String SECRET = "my-super-secret-key-which-should-be-very-long";
-    private static final Key SECRET_KEY = Keys.hmacShaKeyFor(SECRET.getBytes());
+    private final Key key;
+    private final long accessTokenExpMs;
+    private final long refreshTokenExpMs;
 
-    private static final long EXPIRATION_TIME = 1000 * 60 * 60;
+    public JwtUtil(
+            @Value("${jwt.secret}") String secret,
+            @Value("${jwt.access-token-exp-ms}") long accessTokenExpMs,
+            @Value("${jwt.refresh-token-exp-ms}") long refreshTokenExpMs) {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalArgumentException("JWT secret must not be null or empty");
+        }
+        this.key = Keys.hmacShaKeyFor(Base64.getDecoder().decode(secret));
+        this.accessTokenExpMs = accessTokenExpMs;
+        this.refreshTokenExpMs = refreshTokenExpMs;
+    }
 
-    public static String generateToken(String username, String role) {
+    public String generateAccessToken(User user) {
+        long now = System.currentTimeMillis();
         return Jwts.builder()
-                .setSubject(username)
-                .claim("role", role)
-                .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
-                .signWith(SECRET_KEY)
+                .setSubject(user.getUsername())
+                .claim("roles", user.getRoles().stream().map(Role::getName).toList())
+                .setIssuedAt(new Date(now))
+                .setExpiration(new Date(now + accessTokenExpMs))
+                .signWith(key)
                 .compact();
     }
 
-    public Jws<Claims> validateToken(String token) {
-        return Jwts.parserBuilder()
-                .setSigningKey(SECRET_KEY)
-                .build()
-                .parseClaimsJws(token);
+    public String generateRefreshToken() {
+        long now = System.currentTimeMillis();
+        return Jwts.builder()
+                .setId(UUID.randomUUID().toString())
+                .setIssuedAt(new Date(now))
+                .setExpiration(new Date(now + refreshTokenExpMs))
+                .signWith(key)
+                .compact();
     }
 
-    public static Key getSecretKey() {
-        return SECRET_KEY;
+    public Jws<Claims> parseClaims(String token) {
+        return Jwts.parserBuilder().setSigningKey(key).build().parseClaimsJws(token);
+    }
+
+    public boolean isTokenExpired(String token) {
+        try {
+            Date exp = parseClaims(token).getBody().getExpiration();
+            return exp.before(new Date());
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    public String getUsernameFromToken(String token) {
+        return parseClaims(token).getBody().getSubject();
     }
 }
